@@ -81,26 +81,35 @@ def get_settings(session) -> Settings:
 
 
 def build_prompt(exercise: Exercise, options: List[ExerciseOption]):
+    """Construct a JSON template the model must complete."""
+
     response_format = {}
     if exercise.answer_type == AnswerType.FREE_TEXT:
-        response_format = {"response": {"text": "string"}}
+        response_format = {"response": {"text": "<fill with concise answer text>"}}
     elif exercise.answer_type == AnswerType.TRUE_FALSE:
-        response_format = {"response": {"value": "true|false"}}
+        response_format = {"response": {"value": "true or false"}}
     elif exercise.answer_type == AnswerType.SINGLE_CHOICE:
         response_format = {
             "response": {
-                "selected_option_id": "one of option ids",
+                "selected_option_id": "id from provided options",
                 "options": [{"id": opt.id, "text": opt.text} for opt in options],
             }
         }
     elif exercise.answer_type == AnswerType.RANKING:
         response_format = {
             "response": {
-                "ordered_option_ids": "list preserving provided ids",
+                "ordered_option_ids": "array of option ids ordered best to worst (or as requested)",
                 "options": [{"id": opt.id, "text": opt.text} for opt in options],
             }
         }
-    return {"question": exercise.question_text, "expected": response_format}
+
+    return {
+        "question": exercise.question_text,
+        "answer_type": exercise.answer_type,
+        "options": [{"id": opt.id, "text": opt.text} for opt in options],
+        "response": response_format.get("response", {}),
+        "instructions": "Return ONLY JSON. Do not include explanations.",
+    }
 
 
 def call_openai(model: str, temperature: float, prompt: dict, api_key: str):
@@ -108,17 +117,21 @@ def call_openai(model: str, temperature: float, prompt: dict, api_key: str):
         "You are an assistant that answers strictly in JSON. "
         "Use the provided JSON schema and fill only the response fields without extra text."
     )
-    user_message = (
-        "Fill in the response fields for this prompt. Return ONLY valid JSON with the same structure:\n"
-        f"{json.dumps(prompt, ensure_ascii=False)}"
-    )
+    user_message = """
+Read the JSON template below. Fill only the `response` fields with the answer.
+Return ONLY JSON with the same top-level keys.
+""".strip()
+    full_payload = {"template": prompt}
     payload = {
         "model": model,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message},
+            {
+                "role": "user",
+                "content": f"{user_message}\n{json.dumps(full_payload, ensure_ascii=False)}",
+            },
         ],
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -170,11 +183,18 @@ def store_batch_item(
     answer_option_id = None
     answer_ranking = None
     try:
-        response_section = response_json.get("response", {})
+        # Handle both current "response" key and legacy "expected.response" structures
+        response_section = response_json.get("response") or response_json.get("expected", {}).get("response", {})
         if exercise.answer_type == AnswerType.FREE_TEXT:
-            answer_text = str(response_section.get("text", ""))
+            answer_text = str(response_section.get("text", "")).strip()
         elif exercise.answer_type == AnswerType.TRUE_FALSE:
             val = response_section.get("value")
+            if isinstance(val, str):
+                val_lower = val.strip().lower()
+                if val_lower in {"true", "yes", "y"}:
+                    val = True
+                elif val_lower in {"false", "no", "n"}:
+                    val = False
             answer_bool = bool(val) if val is not None else None
         elif exercise.answer_type == AnswerType.SINGLE_CHOICE:
             answer_option_id = response_section.get("selected_option_id")
