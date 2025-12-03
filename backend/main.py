@@ -2,7 +2,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-import requests
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -81,80 +80,31 @@ def get_settings(session) -> Settings:
 
 
 def build_prompt(exercise: Exercise, options: List[ExerciseOption]):
-    """Construct a JSON template the model must complete."""
-
     response_format = {}
     if exercise.answer_type == AnswerType.FREE_TEXT:
-        response_format = {"response": {"text": "<fill with concise answer text>"}}
+        response_format = {"response": {"text": "string"}}
     elif exercise.answer_type == AnswerType.TRUE_FALSE:
-        response_format = {"response": {"value": "true or false"}}
+        response_format = {"response": {"value": "true|false"}}
     elif exercise.answer_type == AnswerType.SINGLE_CHOICE:
         response_format = {
             "response": {
-                "selected_option_id": "id from provided options",
+                "selected_option_id": "one of option ids",
                 "options": [{"id": opt.id, "text": opt.text} for opt in options],
             }
         }
     elif exercise.answer_type == AnswerType.RANKING:
         response_format = {
             "response": {
-                "ordered_option_ids": "array of option ids ordered best to worst (or as requested)",
+                "ordered_option_ids": "list preserving provided ids",
                 "options": [{"id": opt.id, "text": opt.text} for opt in options],
             }
         }
-
-    return {
-        "question": exercise.question_text,
-        "answer_type": exercise.answer_type,
-        "options": [{"id": opt.id, "text": opt.text} for opt in options],
-        "response": response_format.get("response", {}),
-        "instructions": "Return ONLY JSON. Do not include explanations.",
-    }
+    return {"question": exercise.question_text, "expected": response_format}
 
 
-def call_openai(model: str, temperature: float, prompt: dict, api_key: str):
-    system_message = (
-        "You are an assistant that answers strictly in JSON. "
-        "Use the provided JSON schema and fill only the response fields without extra text."
-    )
-    user_message = """
-Read the JSON template below. Fill only the `response` fields with the answer.
-Return ONLY JSON with the same top-level keys.
-""".strip()
-    full_payload = {"template": prompt}
-    payload = {
-        "model": model,
-        "temperature": temperature,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system_message},
-            {
-                "role": "user",
-                "content": f"{user_message}\n{json.dumps(full_payload, ensure_ascii=False)}",
-            },
-        ],
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    response = requests.post(
-        "https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60
-    )
-    response.raise_for_status()
-    data = response.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {"response": {"text": content}}
-
-
-def generate_model_response(
-    provider: str, model: str, temperature: float, prompt: dict, settings: Settings, exercise: Exercise, options: List[ExerciseOption]
-):
-    if provider == "openai" and settings.openai_key:
-        return call_openai(model, temperature, prompt, settings.openai_key)
-    # Additional providers could be added here; fallback to deterministic sample
+def simulate_model_response(exercise: Exercise, options: List[ExerciseOption]):
     if exercise.answer_type == AnswerType.FREE_TEXT:
-        return {"response": {"text": ""}}
+        return {"response": {"text": "Sample response"}}
     if exercise.answer_type == AnswerType.TRUE_FALSE:
         return {"response": {"value": True}}
     if exercise.answer_type == AnswerType.SINGLE_CHOICE:
@@ -166,35 +116,21 @@ def generate_model_response(
     return {}
 
 
-def store_batch_item(
-    session, run: Run, experiment: Experiment, settings: Settings, exercise: Exercise, options: List[ExerciseOption]
-):
+def store_batch_item(session, run: Run, exercise: Exercise, options: List[ExerciseOption]):
     prompt = build_prompt(exercise, options)
+    _ = prompt  # placeholder for future model calls
+    response_json = simulate_model_response(exercise, options)
     parse_success = True
-    try:
-        response_json = generate_model_response(
-            experiment.provider, experiment.model, experiment.temperature, prompt, settings, exercise, options
-        )
-    except Exception:
-        response_json = {}
-        parse_success = False
     answer_text = None
     answer_bool = None
     answer_option_id = None
     answer_ranking = None
     try:
-        # Handle both current "response" key and legacy "expected.response" structures
-        response_section = response_json.get("response") or response_json.get("expected", {}).get("response", {})
+        response_section = response_json.get("response", {})
         if exercise.answer_type == AnswerType.FREE_TEXT:
-            answer_text = str(response_section.get("text", "")).strip()
+            answer_text = str(response_section.get("text", ""))
         elif exercise.answer_type == AnswerType.TRUE_FALSE:
             val = response_section.get("value")
-            if isinstance(val, str):
-                val_lower = val.strip().lower()
-                if val_lower in {"true", "yes", "y"}:
-                    val = True
-                elif val_lower in {"false", "no", "n"}:
-                    val = False
             answer_bool = bool(val) if val is not None else None
         elif exercise.answer_type == AnswerType.SINGLE_CHOICE:
             answer_option_id = response_section.get("selected_option_id")
@@ -228,7 +164,6 @@ def execute_experiment(experiment_id: int):
         try:
             experiment.status = ExperimentStatus.RUNNING
             session.commit()
-            settings = get_settings(session)
             ex_links = session.exec(
                 select(ExperimentExercise)
                 .where(ExperimentExercise.experiment_id == experiment_id)
@@ -258,7 +193,7 @@ def execute_experiment(experiment_id: int):
                 session.refresh(run)
 
                 for exercise, options in exercises:
-                    store_batch_item(session, run, experiment, settings, exercise, options)
+                    store_batch_item(session, run, exercise, options)
                 run.status = RunStatus.COMPLETED
                 run.completed_at = datetime.utcnow()
                 session.commit()
