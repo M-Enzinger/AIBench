@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIBench</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-5xl mx-auto py-8 px-4">
+    <h1 class="text-3xl font-bold mb-6">AIBench</h1>
+    <div class="mb-6">
+      <div class="flex gap-4 mb-4">
+        <button id="tab-templates" class="tab-btn px-4 py-2 rounded bg-blue-600 text-white">Templates</button>
+        <button id="tab-execute" class="tab-btn px-4 py-2 rounded bg-gray-200">Execute</button>
+      </div>
+      <div id="templates-section" class="tab-section">
+        <div class="bg-white p-4 rounded shadow">
+          <h2 class="text-xl font-semibold mb-3">Create Exercise Template</h2>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm font-medium">Title</label>
+              <input id="template-title" type="text" class="w-full border rounded px-3 py-2" placeholder="Template title" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium">Question Text</label>
+              <textarea id="template-question" class="w-full border rounded px-3 py-2" rows="4" placeholder="Prompt text sent to the model"></textarea>
+            </div>
+            <button id="create-template" class="px-4 py-2 bg-blue-600 text-white rounded">Save Template</button>
+            <p id="template-message" class="text-sm text-green-700"></p>
+          </div>
+        </div>
+        <div class="bg-white p-4 rounded shadow mt-6">
+          <h2 class="text-xl font-semibold mb-3">All Templates</h2>
+          <ul id="template-list" class="space-y-2 text-sm"></ul>
+        </div>
+      </div>
+
+      <div id="execute-section" class="tab-section hidden">
+        <div class="bg-white p-4 rounded shadow space-y-3">
+          <h2 class="text-xl font-semibold">Start Execution</h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium">Template</label>
+              <select id="exec-template" class="w-full border rounded px-3 py-2"></select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium">Provider</label>
+              <select id="exec-provider" class="w-full border rounded px-3 py-2">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+                <option value="grok">Grok</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium">Model</label>
+              <input id="exec-model" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. gpt-4o-mini" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium">Temperature</label>
+              <input id="exec-temperature" type="number" step="0.1" class="w-full border rounded px-3 py-2" value="0" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium">Runs</label>
+              <input id="exec-runs" type="number" class="w-full border rounded px-3 py-2" value="1" />
+            </div>
+          </div>
+          <button id="start-execution" class="px-4 py-2 bg-blue-600 text-white rounded">Run</button>
+          <p id="execution-message" class="text-sm text-red-700"></p>
+        </div>
+
+        <div class="bg-white p-4 rounded shadow mt-6">
+          <h2 class="text-xl font-semibold mb-3">Executions</h2>
+          <div id="execution-list" class="space-y-3"></div>
+        </div>
+
+        <div class="bg-white p-4 rounded shadow mt-6 hidden" id="runs-panel">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">Runs</h3>
+            <a id="download-csv" class="text-blue-600 underline" href="#">Download CSV</a>
+          </div>
+          <table class="min-w-full text-sm mt-3">
+            <thead>
+              <tr class="border-b">
+                <th class="text-left py-2">#</th>
+                <th class="text-left py-2">Answer</th>
+              </tr>
+            </thead>
+            <tbody id="run-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const templateList = document.getElementById('template-list');
+    const templateMessage = document.getElementById('template-message');
+    const executionMessage = document.getElementById('execution-message');
+
+    function switchTab(target) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('bg-blue-600', 'text-white'));
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.add('bg-gray-200'));
+      document.querySelectorAll('.tab-section').forEach(sec => sec.classList.add('hidden'));
+      document.getElementById(target + '-section').classList.remove('hidden');
+      document.getElementById('tab-' + target).classList.add('bg-blue-600', 'text-white');
+      document.getElementById('tab-' + target).classList.remove('bg-gray-200');
+    }
+
+    document.getElementById('tab-templates').addEventListener('click', () => switchTab('templates'));
+    document.getElementById('tab-execute').addEventListener('click', () => switchTab('execute'));
+
+    async function fetchTemplates() {
+      const res = await fetch('/api/templates');
+      const data = await res.json();
+      templateList.innerHTML = '';
+      const execSelect = document.getElementById('exec-template');
+      execSelect.innerHTML = '';
+      data.forEach(t => {
+        const li = document.createElement('li');
+        li.className = 'border rounded px-3 py-2';
+        li.innerHTML = `<div class="font-semibold">${t.title}</div><div class="text-gray-600 whitespace-pre-wrap">${t.question_text}</div>`;
+        templateList.appendChild(li);
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = t.title;
+        execSelect.appendChild(opt);
+      });
+    }
+
+    document.getElementById('create-template').addEventListener('click', async () => {
+      const title = document.getElementById('template-title').value;
+      const question = document.getElementById('template-question').value;
+      const res = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, question_text: question })
+      });
+      if (res.ok) {
+        document.getElementById('template-title').value = '';
+        document.getElementById('template-question').value = '';
+        templateMessage.textContent = 'Template saved.';
+        fetchTemplates();
+      } else {
+        const err = await res.json();
+        templateMessage.textContent = err.error || 'Error saving template.';
+      }
+      setTimeout(() => templateMessage.textContent = '', 3000);
+    });
+
+    document.getElementById('start-execution').addEventListener('click', async () => {
+      const template_id = document.getElementById('exec-template').value;
+      const provider = document.getElementById('exec-provider').value;
+      const model = document.getElementById('exec-model').value;
+      const temperature = parseFloat(document.getElementById('exec-temperature').value);
+      const runs_requested = parseInt(document.getElementById('exec-runs').value, 10);
+      executionMessage.textContent = 'Running...';
+      const res = await fetch('/api/executions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id, provider, model, temperature, runs_requested })
+      });
+      if (res.ok) {
+        executionMessage.textContent = 'Execution completed.';
+        const execData = await res.json();
+        loadExecutions(template_id, execData.execution_id);
+      } else {
+        const err = await res.json();
+        executionMessage.textContent = err.error || 'Execution failed.';
+      }
+      setTimeout(() => executionMessage.textContent = '', 4000);
+    });
+
+    async function loadExecutions(templateId, selectExecutionId = null) {
+      const res = await fetch(`/api/templates/${templateId}/executions`);
+      const executions = await res.json();
+      const list = document.getElementById('execution-list');
+      list.innerHTML = '';
+      executions.forEach(exec => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'border rounded p-3';
+        const btn = document.createElement('button');
+        btn.className = 'text-left w-full';
+        btn.innerHTML = `<div class="font-semibold">${exec.provider} - ${exec.model}</div>
+          <div class="text-gray-600 text-sm">${new Date(exec.created_at).toLocaleString()} · Runs: ${exec.runs_requested} · Temp: ${exec.temperature}</div>`;
+        btn.addEventListener('click', () => loadRuns(exec.id));
+        wrapper.appendChild(btn);
+        list.appendChild(wrapper);
+        if (selectExecutionId && exec.id === selectExecutionId) {
+          loadRuns(exec.id);
+        }
+      });
+    }
+
+    async function loadRuns(executionId) {
+      const res = await fetch(`/api/executions/${executionId}/runs`);
+      const runs = await res.json();
+      const rows = document.getElementById('run-rows');
+      rows.innerHTML = '';
+      runs.forEach(run => {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b';
+        tr.innerHTML = `<td class="align-top py-2 pr-4">${run.run_index}</td><td class="py-2 whitespace-pre-wrap">${run.answer_text || ''}</td>`;
+        rows.appendChild(tr);
+      });
+      document.getElementById('download-csv').href = `/api/executions/${executionId}/runs/csv`;
+      document.getElementById('runs-panel').classList.remove('hidden');
+    }
+
+    document.getElementById('exec-template').addEventListener('change', (e) => {
+      loadExecutions(e.target.value);
+    });
+
+    fetchTemplates().then(() => {
+      const firstOption = document.getElementById('exec-template').value;
+      if (firstOption) {
+        loadExecutions(firstOption);
+      }
+    });
+  </script>
+</body>
+</html>
