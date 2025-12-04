@@ -289,7 +289,8 @@ def call_model(provider: str, model: str, temperature: float, api_key: str, ques
     raise ValueError("Unsupported provider")
 
 
+with app.app_context():
+    init_db()
+
 if __name__ == "__main__":
-    with app.app_context():
-        init_db()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 2222)))
